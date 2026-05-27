@@ -8,16 +8,16 @@
  * the model can use this tool to look up details from that session.
  */
 
-import { complete, type Message } from "@mariozechner/pi-ai";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { complete, type Message } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	SessionManager,
 	convertToLlm,
 	getMarkdownTheme,
 	serializeConversation,
 	type SessionEntry,
-} from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 
 const QUERY_SYSTEM_PROMPT = `You are a session context assistant. Given the conversation history from a pi coding session and a question, provide a concise answer based on the session contents.
@@ -127,71 +127,86 @@ export default function (pi: ExtensionAPI) {
 			const llmMessages = convertToLlm(messages);
 			const conversationText = serializeConversation(llmMessages);
 
-			// Determine the model to use: prefer the queried session's own model,
-			// fall back to the current session's model.
-			let queryModel = ctx.model;
+			// Determine models to use. Prefer the current session's model: handed-off
+			// prompts often query an older parent session whose recorded model may no
+			// longer exist in the active provider (for example, provider returns
+			// `not_found`). Keep the parent session model as a fallback when available.
+			const queryModels: any[] = [];
+			const addQueryModel = (model: any) => {
+				if (!model) return;
+				const key = `${model.provider ?? ""}/${model.id ?? ""}`;
+				if (queryModels.some((m) => `${m.provider ?? ""}/${m.id ?? ""}` === key)) return;
+				queryModels.push(model);
+			};
+			addQueryModel(ctx.model);
+
 			const modelChanges = branch.filter(
 				(entry): entry is SessionEntry & { type: "model_change" } => entry.type === "model_change",
 			);
 			if (modelChanges.length > 0) {
 				const lastChange = modelChanges[modelChanges.length - 1]!;
-				const sessionModel = ctx.modelRegistry.find(lastChange.provider, lastChange.modelId);
-				if (sessionModel) {
-					queryModel = sessionModel;
-				}
+				addQueryModel(ctx.modelRegistry.find(lastChange.provider, lastChange.modelId));
 			}
 
-			if (!queryModel) {
+			if (queryModels.length === 0) {
 				return errorResult("Error: No model available to analyze the session.");
 			}
 
-			try {
-				const auth = await ctx.modelRegistry.getApiKeyAndHeaders(queryModel);
-				if (!auth.ok) {
-					return errorResult(`Error: ${auth.error}`);
-				}
-				const { apiKey, headers } = auth;
-
-				const userMessage: Message = {
-					role: "user",
-					content: [
-						{
-							type: "text",
-							text: `## Session Conversation\n\n${conversationText}\n\n## Question\n\n${question}`,
-						},
-					],
-					timestamp: Date.now(),
-				};
-
-				const response = await complete(
-					queryModel,
-					{ systemPrompt: QUERY_SYSTEM_PROMPT, messages: [userMessage] },
-					{ apiKey, headers, signal },
-				);
-
-				if (response.stopReason === "aborted") {
-					return {
-						content: [{ type: "text" as const, text: "Query was cancelled." }],
-						details: { cancelled: true },
-					};
-				}
-
-				const answer = response.content
-					.filter((c): c is { type: "text"; text: string } => c.type === "text")
-					.map((c) => c.text)
-					.join("\n");
-
-				return {
-					content: [{ type: "text" as const, text: `**Query:** ${question}\n\n---\n\n${answer}` }],
-					details: {
-						sessionPath,
-						question,
-						messageCount: messages.length,
+			const userMessage: Message = {
+				role: "user",
+				content: [
+					{
+						type: "text",
+						text: `## Session Conversation\n\n${conversationText}\n\n## Question\n\n${question}`,
 					},
-				};
-			} catch (err) {
-				return errorResult(`Error querying session: ${err}`);
+				],
+				timestamp: Date.now(),
+			};
+
+			const errors: string[] = [];
+			for (const queryModel of queryModels) {
+				const modelLabel = `${queryModel.provider ?? "unknown"}/${queryModel.id ?? "unknown"}`;
+				try {
+					const auth = await ctx.modelRegistry.getApiKeyAndHeaders(queryModel);
+					if (!auth.ok) {
+						errors.push(`${modelLabel}: ${auth.error}`);
+						continue;
+					}
+					const { apiKey, headers } = auth;
+
+					const response = await complete(
+						queryModel,
+						{ systemPrompt: QUERY_SYSTEM_PROMPT, messages: [userMessage] },
+						{ apiKey, headers, signal },
+					);
+
+					if (response.stopReason === "aborted") {
+						return {
+							content: [{ type: "text" as const, text: "Query was cancelled." }],
+							details: { cancelled: true },
+						};
+					}
+
+					const answer = response.content
+						.filter((c): c is { type: "text"; text: string } => c.type === "text")
+						.map((c) => c.text)
+						.join("\n");
+
+					return {
+						content: [{ type: "text" as const, text: `**Query:** ${question}\n\n---\n\n${answer}` }],
+						details: {
+							sessionPath,
+							question,
+							messageCount: messages.length,
+							model: modelLabel,
+						},
+					};
+				} catch (err) {
+					errors.push(`${modelLabel}: ${err}`);
+				}
 			}
+
+			return errorResult(`Error querying session: ${errors.join("; ")}`);
 		},
 	});
 }
