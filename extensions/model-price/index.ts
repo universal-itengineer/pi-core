@@ -7,7 +7,7 @@
  * Usage: Place in ~/.pi/agent/extensions/model-price.ts
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 interface ModelCost {
 	input: number;

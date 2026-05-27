@@ -12,7 +12,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as child_process from "node:child_process";
-import { type ExtensionAPI, type ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const YELLOW = "\x1b[33m", RESET = "\x1b[0m";
 const GOLANGCI_CONFIGS = [

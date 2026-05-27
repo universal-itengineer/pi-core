@@ -3,7 +3,7 @@
  * Aligns with the project web-search skill; set JINA_API_KEY for search rate limits / access.
  */
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 const TIMEOUT_MS = 30_000;
